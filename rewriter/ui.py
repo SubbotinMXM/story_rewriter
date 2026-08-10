@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+import sys
 import threading
 import traceback
 from pathlib import Path
@@ -65,6 +67,33 @@ MODE_HOOK = "hook"
 _STORY_MODES = {MODE_REWRITE, MODE_PROFESSION, MODE_HOOK}
 
 
+def _configure_ctk_theme() -> None:
+    """Тема ДО CTk() — иначе на части macOS/Tk серое пустое окно."""
+    mode = (os.environ.get("CTK_APPEARANCE") or "System").strip() or "System"
+    try:
+        ctk.set_appearance_mode(mode)
+    except Exception as exc:
+        log(f"appearance_mode({mode}): {exc}")
+        try:
+            ctk.set_appearance_mode("Light")
+        except Exception:
+            pass
+    try:
+        ctk.set_default_color_theme("blue")
+    except Exception as exc:
+        log(f"color_theme: {exc}")
+    # Retina/scaling глитчи на части Mac → явный 1.0
+    for setter in (
+        getattr(ctk, "set_widget_scaling", None),
+        getattr(ctk, "set_window_scaling", None),
+    ):
+        if callable(setter):
+            try:
+                setter(1.0)
+            except Exception:
+                pass
+
+
 def _resolve_model(saved: str | None) -> str:
     if saved and saved.strip() in DEFAULT_MODELS:
         return saved.strip()
@@ -82,7 +111,10 @@ def _model_menu_values(current: str) -> list[str]:
 
 
 class App(ctk.CTk, TkinterDnD.DnDWrapper):
-    def __init__(self) -> None:
+    def __init__(self, *, debug_ui: bool = False) -> None:
+        self._debug_ui = debug_ui
+        # ОБЯЗАТЕЛЬНО до super()/CTk — иначе blank gray на части Mac
+        _configure_ctk_theme()
         super().__init__()
         try:
             self.TkdndVersion = TkinterDnD._require(self)
@@ -94,14 +126,19 @@ class App(ctk.CTk, TkinterDnD.DnDWrapper):
         self.geometry("1100x980")
         self.minsize(920, 800)
         try:
-            ctk.set_appearance_mode("System")
-            ctk.set_default_color_theme("blue")
-        except Exception as exc:
-            log(f"appearance/theme: {exc}")
-            try:
-                ctk.set_appearance_mode("Light")
-            except Exception:
-                pass
+            self.update_idletasks()
+        except Exception:
+            pass
+
+        # Ранний маркер: если серое навсегда без этого текста — упали до build
+        self._boot_label = ctk.CTkLabel(
+            self, text="Загрузка UI…", font=ctk.CTkFont(size=18)
+        )
+        self._boot_label.pack(expand=True, fill="both")
+        try:
+            self.update_idletasks()
+        except Exception:
+            pass
 
         cfg = load_config()
         self.api_key_var = ctk.StringVar(value=str(cfg.get("api_key", "")))
@@ -174,19 +211,20 @@ class App(ctk.CTk, TkinterDnD.DnDWrapper):
         )
 
         try:
+            if self._boot_label is not None:
+                self._boot_label.destroy()
+                self._boot_label = None
             self._build_layout(cfg)
             set_log_callback(self._append_log)
+            self._run_post_build_hooks()
+            self._finish_ui_show(announce_debug=False)
+            # clipboard ПОСЛЕДНИМ — бинды/обход дерева не должны мешать сборке UI
             try:
                 enable_mac_clipboard(self)
             except Exception as exc:
                 log(f"clipboard macOS: {exc}")
-            self._refresh_run_button()
-            self._refresh_generate_btn_text()
-            self._refresh_all_preset_ui()
-            self._update_pipeline_thumb_visibility()
-            self._sync_story_input_ui()
-            self._sync_story_mode_ui()
             log("Старт UI Story -> Video")
+            self.after(0, lambda: self._finish_ui_show(announce_debug=True))
         except Exception:
             err = traceback.format_exc()
             log(f"UI init crash:\n{err}")
@@ -200,40 +238,140 @@ class App(ctk.CTk, TkinterDnD.DnDWrapper):
                 pass
             raise
 
+    def _try_section(self, name: str, fn) -> None:
+        try:
+            fn()
+        except Exception:
+            err = traceback.format_exc()
+            log(f"UI section '{name}' failed:\n{err}")
+            try:
+                messagebox.showerror(
+                    "Ошибка UI",
+                    f"Секция «{name}» не собралась.\n\n{err[-900:]}",
+                )
+            except Exception:
+                pass
+
+    def _run_post_build_hooks(self) -> None:
+        for name, fn in (
+            ("refresh_run_button", self._refresh_run_button),
+            ("refresh_generate_btn", self._refresh_generate_btn_text),
+            ("refresh_preset_ui", self._refresh_all_preset_ui),
+            ("pipeline_thumb_visibility", self._update_pipeline_thumb_visibility),
+            ("sync_story_input", self._sync_story_input_ui),
+            ("sync_story_mode", self._sync_story_mode_ui),
+        ):
+            try:
+                fn()
+            except Exception:
+                err = traceback.format_exc()
+                log(f"post-build '{name}' failed:\n{err}")
+                try:
+                    messagebox.showerror(
+                        "Ошибка UI",
+                        f"Пост-сборка «{name}» упала (UI уже есть).\n\n{err[-900:]}",
+                    )
+                except Exception:
+                    pass
+
+    def _finish_ui_show(self, *, announce_debug: bool = False) -> None:
+        """Показать окно / форснуть layout — blank CTk на Retina Mac."""
+        try:
+            self.update_idletasks()
+            self.update()
+        except Exception as exc:
+            log(f"finish_ui update: {exc}")
+        try:
+            w, h = int(self.winfo_width()), int(self.winfo_height())
+            if w < 200 or h < 200:
+                self.geometry("1100x980")
+                self.update_idletasks()
+        except Exception:
+            try:
+                self.geometry("1100x980")
+            except Exception:
+                pass
+        for call in (self.deiconify, self.lift, self.focus_force):
+            try:
+                call()
+            except Exception:
+                pass
+        try:
+            if hasattr(self, "tabs"):
+                self.tabs.set(TAB_FULL)
+        except Exception as exc:
+            log(f"tabs.set: {exc}")
+        try:
+            n = len(self.winfo_children())
+
+            def _count(w) -> int:
+                total = 0
+                for c in w.winfo_children():
+                    total += 1 + _count(c)
+                return total
+
+            deep = _count(self)
+            msg = (
+                f"UI built: {n} top children, {deep} widgets, "
+                f"geometry={self.geometry()}, "
+                f"winfo={self.winfo_width()}x{self.winfo_height()}"
+            )
+            log(msg)
+            if announce_debug and self._debug_ui:
+                try:
+                    messagebox.showinfo("debug-ui", msg)
+                except Exception:
+                    print(msg, file=sys.stderr)
+        except Exception as exc:
+            log(f"finish_ui count: {exc}")
+
     def _build_layout(self, cfg: dict) -> None:
         root = ctk.CTkFrame(self)
         root.pack(fill="both", expand=True, padx=10, pady=10)
 
         self.tabs = ctk.CTkTabview(root, command=self._on_tab_changed)
+        # footer снизу первым — tabview забирает остаток (надёжнее на macOS)
+        footer = ctk.CTkFrame(root)
+        footer.pack(side="bottom", fill="x", pady=(8, 0))
         self.tabs.pack(fill="both", expand=True)
+
         tab_full = self.tabs.add(TAB_FULL)
         tab_text = self.tabs.add(TAB_TEXT)
         tab_audio = self.tabs.add(TAB_AUDIO)
         tab_thumb = self.tabs.add(TAB_PREVIEW)
         tab_prompts = self.tabs.add(TAB_PROMPTS)
 
-        full_body = ctk.CTkScrollableFrame(tab_full)
-        full_body.pack(fill="both", expand=True, padx=4, pady=4)
-        self._build_full_form(full_body, cfg)
+        def _full() -> None:
+            full_body = ctk.CTkScrollableFrame(tab_full)
+            full_body.pack(fill="both", expand=True, padx=4, pady=4)
+            self._build_full_form(full_body, cfg)
 
-        text_body = ctk.CTkScrollableFrame(tab_text)
-        text_body.pack(fill="both", expand=True, padx=4, pady=4)
-        self._build_from_text_tab(text_body, cfg)
+        def _text() -> None:
+            text_body = ctk.CTkScrollableFrame(tab_text)
+            text_body.pack(fill="both", expand=True, padx=4, pady=4)
+            self._build_from_text_tab(text_body, cfg)
 
-        audio_body = ctk.CTkScrollableFrame(tab_audio)
-        audio_body.pack(fill="both", expand=True, padx=4, pady=4)
-        self._build_from_audio_tab(audio_body, cfg)
+        def _audio() -> None:
+            audio_body = ctk.CTkScrollableFrame(tab_audio)
+            audio_body.pack(fill="both", expand=True, padx=4, pady=4)
+            self._build_from_audio_tab(audio_body, cfg)
 
-        thumb_body = ctk.CTkScrollableFrame(tab_thumb)
-        thumb_body.pack(fill="both", expand=True, padx=4, pady=4)
-        self._build_thumb_tab(thumb_body)
+        def _thumb() -> None:
+            thumb_body = ctk.CTkScrollableFrame(tab_thumb)
+            thumb_body.pack(fill="both", expand=True, padx=4, pady=4)
+            self._build_thumb_tab(thumb_body)
 
-        prompts_body = ctk.CTkFrame(tab_prompts, fg_color="transparent")
-        prompts_body.pack(fill="both", expand=True, padx=4, pady=4)
-        self._build_prompts_tab(prompts_body)
+        def _prompts() -> None:
+            prompts_body = ctk.CTkFrame(tab_prompts, fg_color="transparent")
+            prompts_body.pack(fill="both", expand=True, padx=4, pady=4)
+            self._build_prompts_tab(prompts_body)
 
-        footer = ctk.CTkFrame(root)
-        footer.pack(fill="x", pady=(8, 0))
+        self._try_section(TAB_FULL, _full)
+        self._try_section(TAB_TEXT, _text)
+        self._try_section(TAB_AUDIO, _audio)
+        self._try_section(TAB_PREVIEW, _thumb)
+        self._try_section(TAB_PROMPTS, _prompts)
+
         self.progress = ctk.CTkProgressBar(footer)
         self.progress.pack(fill="x", padx=16, pady=(12, 6))
         self.progress.set(0)
@@ -2246,8 +2384,11 @@ class App(ctk.CTk, TkinterDnD.DnDWrapper):
 
 
 def main() -> None:
+    debug_ui = "--debug-ui" in sys.argv
+    if debug_ui:
+        sys.argv = [a for a in sys.argv if a != "--debug-ui"]
     try:
-        app = App()
+        app = App(debug_ui=debug_ui)
     except Exception:
         # App уже мог показать messagebox; дублируем в stderr
         traceback.print_exc()

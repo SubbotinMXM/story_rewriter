@@ -85,18 +85,26 @@ def _safe_bind_all(root: tk.Misc, seq: str, handler: Callable, *, add: str | Non
 
 
 def enable_mac_clipboard(root: ctk.CTk) -> None:
+    """Никогда не должен валить старт UI — все бинды best-effort."""
     _STATE["root"] = root
     _STATE["last"] = None
 
-    for seq, name in _ASCII_SEQUENCES:
-        _safe_bind_all(root, seq, _handler_for(name))
+    try:
+        for seq, name in _ASCII_SEQUENCES:
+            _safe_bind_all(root, seq, _handler_for(name))
 
-    # Русская раскладка / любой keysym: keycode + char, без кириллицы в bind-строке
-    _safe_bind_all(root, "<Command-KeyPress>", _command_keypress)
-    _safe_bind_all(root, "<Meta-KeyPress>", _command_keypress)
+        # Русская раскладка / любой keysym: keycode + char, без кириллицы в bind-строке
+        _safe_bind_all(root, "<Command-KeyPress>", _command_keypress)
+        _safe_bind_all(root, "<Meta-KeyPress>", _command_keypress)
 
-    _safe_bind_all(root, "<FocusIn>", _on_focus_in, add="+")
-    _bind_tree(root)
+        _safe_bind_all(root, "<FocusIn>", _on_focus_in, add="+")
+        try:
+            _bind_tree(root)
+        except Exception:
+            pass
+    except Exception:
+        # полный fail-soft: UI уже собран
+        pass
 
 
 def bind_widget(widget: tk.Misc) -> None:

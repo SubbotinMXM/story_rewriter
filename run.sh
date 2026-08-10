@@ -77,6 +77,27 @@ if ! "$VENV_PY" -c "import tkinter" 2>/dev/null; then
   die "В .venv нет tkinter. На Apple Silicon: brew install python-tk@3.12 (или тот же major, что у venv)"
 fi
 
+# Диагностика Tk/CTk: blank gray часто = старый системный Tk / mismatch python-tk
+"$VENV_PY" - <<'PY' || die "CTk smoke failed — переустанови python-tk того же major, что venv: brew reinstall python-tk@3.12 && rm -rf .venv && ./run.sh"
+import sys
+import tkinter as tk
+import customtkinter as ctk
+
+print(f"Python {sys.version.split()[0]}  tk={tk.TkVersion} tcl={tk.TclVersion}")
+ctk.set_appearance_mode("Light")
+ctk.set_default_color_theme("blue")
+root = ctk.CTk()
+root.withdraw()
+btn = ctk.CTkButton(root, text="smoke")
+btn.pack()
+root.update_idletasks()
+n = len(root.winfo_children())
+root.destroy()
+if n < 1:
+    raise SystemExit("CTk created zero children")
+print(f"CTk smoke ok (children={n})")
+PY
+
 if ! command -v ffmpeg >/dev/null 2>&1; then
   print -u2 "WARN: ffmpeg не найден в PATH (сборка роликов упадёт). brew install ffmpeg"
 fi
