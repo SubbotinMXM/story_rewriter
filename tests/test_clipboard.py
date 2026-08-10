@@ -136,6 +136,65 @@ class ClipboardTests(unittest.TestCase):
 
         self.assertIsNone(cm._paste(Ev()))
 
+    def test_no_cyrillic_bind_sequences(self) -> None:
+        """Нельзя биндить <Command-м> — TclError на части Tk."""
+        for seq, _ in cm._ASCII_SEQUENCES:
+            self.assertTrue(seq.isascii(), seq)
+            self.assertNotRegex(seq, r"[а-яА-ЯёЁ]")
+
+    def test_enable_skips_bad_keysym(self) -> None:
+        """bind_all с TclError на sequence не валит enable_mac_clipboard."""
+        calls: list[str] = []
+        real_bind_all = self.root.bind_all
+
+        def flaky(seq, handler, add=None):
+            calls.append(seq)
+            if "KeyPress" in seq:
+                raise cm.tk.TclError(f'bad event type or keysym "м"')
+            if add is None:
+                return real_bind_all(seq, handler)
+            return real_bind_all(seq, handler, add=add)
+
+        with mock.patch.object(self.root, "bind_all", side_effect=flaky):
+            # не должно бросить
+            enable_mac_clipboard(self.root)
+        self.assertTrue(any("Command-v" in s for s in calls))
+
+    def test_command_keypress_ru_char(self) -> None:
+        self._focus(self.native_entry)
+        write_clipboard(self.native_entry, "RU")
+
+        class Ev:
+            widget = self.native_entry
+            keycode = None
+            char = "м"
+            keysym = "м"
+
+        self.assertEqual(cm._command_keypress(Ev()), "break")
+        self.assertEqual(self.native_entry.get(), "RU")
+
+    def test_command_keypress_keycode_v(self) -> None:
+        self._focus(self.native_entry)
+        write_clipboard(self.native_entry, "KC")
+
+        class Ev:
+            widget = self.native_entry
+            keycode = cm._KEYCODE_V
+            char = ""
+            keysym = "??"
+
+        self.assertEqual(cm._command_keypress(Ev()), "break")
+        self.assertEqual(self.native_entry.get(), "KC")
+
+
+class BindSafetyNoDisplayTests(unittest.TestCase):
+    """Без живого Tk — проверка что кириллица не в bind-списке."""
+
+    def test_ascii_only_sequences(self) -> None:
+        for seq, name in cm._ASCII_SEQUENCES:
+            self.assertTrue(seq.isascii(), seq)
+            self.assertIn(name, {"paste", "copy", "cut", "select_all"})
+
 
 if __name__ == "__main__":
     unittest.main()

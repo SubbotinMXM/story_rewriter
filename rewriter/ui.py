@@ -84,12 +84,24 @@ def _model_menu_values(current: str) -> list[str]:
 class App(ctk.CTk, TkinterDnD.DnDWrapper):
     def __init__(self) -> None:
         super().__init__()
-        self.TkdndVersion = TkinterDnD._require(self)
+        try:
+            self.TkdndVersion = TkinterDnD._require(self)
+        except Exception as exc:
+            # DnD опционален — без него UI всё равно должен открыться
+            self.TkdndVersion = None
+            log(f"TkinterDnD недоступен: {exc}")
         self.title("Story -> Video")
         self.geometry("1100x980")
         self.minsize(920, 800)
-        ctk.set_appearance_mode("System")
-        ctk.set_default_color_theme("blue")
+        try:
+            ctk.set_appearance_mode("System")
+            ctk.set_default_color_theme("blue")
+        except Exception as exc:
+            log(f"appearance/theme: {exc}")
+            try:
+                ctk.set_appearance_mode("Light")
+            except Exception:
+                pass
 
         cfg = load_config()
         self.api_key_var = ctk.StringVar(value=str(cfg.get("api_key", "")))
@@ -161,16 +173,32 @@ class App(ctk.CTk, TkinterDnD.DnDWrapper):
             on_preset_change=self._sync_story_input_ui,
         )
 
-        self._build_layout(cfg)
-        set_log_callback(self._append_log)
-        enable_mac_clipboard(self)
-        self._refresh_run_button()
-        self._refresh_generate_btn_text()
-        self._refresh_all_preset_ui()
-        self._update_pipeline_thumb_visibility()
-        self._sync_story_input_ui()
-        self._sync_story_mode_ui()
-        log("Старт UI Story -> Video")
+        try:
+            self._build_layout(cfg)
+            set_log_callback(self._append_log)
+            try:
+                enable_mac_clipboard(self)
+            except Exception as exc:
+                log(f"clipboard macOS: {exc}")
+            self._refresh_run_button()
+            self._refresh_generate_btn_text()
+            self._refresh_all_preset_ui()
+            self._update_pipeline_thumb_visibility()
+            self._sync_story_input_ui()
+            self._sync_story_mode_ui()
+            log("Старт UI Story -> Video")
+        except Exception:
+            err = traceback.format_exc()
+            log(f"UI init crash:\n{err}")
+            try:
+                messagebox.showerror(
+                    "Ошибка запуска",
+                    "UI не собрался. Смотри rewriter.log и терминал.\n\n"
+                    + err[-1500:],
+                )
+            except Exception:
+                pass
+            raise
 
     def _build_layout(self, cfg: dict) -> None:
         root = ctk.CTkFrame(self)
@@ -2218,5 +2246,10 @@ class App(ctk.CTk, TkinterDnD.DnDWrapper):
 
 
 def main() -> None:
-    app = App()
+    try:
+        app = App()
+    except Exception:
+        # App уже мог показать messagebox; дублируем в stderr
+        traceback.print_exc()
+        raise SystemExit(1) from None
     app.mainloop()

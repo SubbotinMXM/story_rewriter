@@ -5,13 +5,16 @@ clipboard_get() + return 'break' убивает последующие Cmd+V. Л
 - трекаем последний focused Entry/Text
 - читаем буфер через Tk, иначе через pbpaste
 - 'break' только если реально вставили текст
+
+Русская раскладка: НЕ биндим кириллические keysym (<Command-м> и т.п.) —
+часть Tcl/Tk (CLT Python) падает с TclError. Ловим через KeyPress + keycode/char.
 """
 
 from __future__ import annotations
 
 import subprocess
 import tkinter as tk
-from typing import Any
+from typing import Any, Callable
 
 import customtkinter as ctk
 
@@ -20,75 +23,21 @@ _STATE: dict[str, Any] = {
     "last": None,
 }
 
-
-def enable_mac_clipboard(root: ctk.CTk) -> None:
-    _STATE["root"] = root
-    _STATE["last"] = None
-
-    sequences = (
-        ("<Command-v>", _paste),
-        ("<Command-V>", _paste),
-        ("<Command-c>", _copy),
-        ("<Command-C>", _copy),
-        ("<Command-x>", _cut),
-        ("<Command-X>", _cut),
-        ("<Command-a>", _select_all),
-        ("<Command-A>", _select_all),
-        ("<Meta-v>", _paste),
-        ("<Meta-c>", _copy),
-        ("<Meta-x>", _cut),
-        ("<Meta-a>", _select_all),
-        # Русская раскладка: те же физ. клавиши → м/с/ч/ф
-        ("<Command-м>", _paste),
-        ("<Command-М>", _paste),
-        ("<Command-с>", _copy),
-        ("<Command-С>", _copy),
-        ("<Command-ч>", _cut),
-        ("<Command-Ч>", _cut),
-        ("<Command-ф>", _select_all),
-        ("<Command-Ф>", _select_all),
-        ("<Command-KeyPress>", _command_keypress),
-        ("<Meta-KeyPress>", _command_keypress),
-    )
-    for seq, handler in sequences:
-        root.bind_all(seq, handler)
-
-    root.bind_all("<FocusIn>", _on_focus_in, add="+")
-    _bind_tree(root)
-
-
-def bind_widget(widget: tk.Misc) -> None:
-    native = _native(widget)
-    if native is None:
-        return
-    sequences = (
-        ("<Command-v>", _paste),
-        ("<Command-V>", _paste),
-        ("<Command-c>", _copy),
-        ("<Command-C>", _copy),
-        ("<Command-x>", _cut),
-        ("<Command-X>", _cut),
-        ("<Command-a>", _select_all),
-        ("<Command-A>", _select_all),
-        ("<Meta-v>", _paste),
-        ("<Meta-c>", _copy),
-        ("<Meta-x>", _cut),
-        ("<Meta-a>", _select_all),
-        ("<Command-м>", _paste),
-        ("<Command-М>", _paste),
-        ("<Command-с>", _copy),
-        ("<Command-С>", _copy),
-        ("<Command-ч>", _cut),
-        ("<Command-Ч>", _cut),
-        ("<Command-ф>", _select_all),
-        ("<Command-Ф>", _select_all),
-        ("<Command-KeyPress>", _command_keypress),
-        ("<Meta-KeyPress>", _command_keypress),
-        ("<FocusIn>", _on_focus_in),
-    )
-    for seq, handler in sequences:
-        native.bind(seq, handler, add="+")
-
+# Только ASCII — безопасно на любом Tk
+_ASCII_SEQUENCES: tuple[tuple[str, str], ...] = (
+    ("<Command-v>", "paste"),
+    ("<Command-V>", "paste"),
+    ("<Command-c>", "copy"),
+    ("<Command-C>", "copy"),
+    ("<Command-x>", "cut"),
+    ("<Command-X>", "cut"),
+    ("<Command-a>", "select_all"),
+    ("<Command-A>", "select_all"),
+    ("<Meta-v>", "paste"),
+    ("<Meta-c>", "copy"),
+    ("<Meta-x>", "cut"),
+    ("<Meta-a>", "select_all"),
+)
 
 # ANSI keycodes на Mac (не зависят от раскладки)
 _KEYCODE_A = 0
@@ -96,20 +45,112 @@ _KEYCODE_C = 8
 _KEYCODE_V = 9
 _KEYCODE_X = 7
 
+# Физические клавиши QWERTY при русской раскладке (event.char / keysym)
+_RU_CHARS_PASTE = frozenset("мМ")
+_RU_CHARS_COPY = frozenset("сС")
+_RU_CHARS_CUT = frozenset("чЧ")
+_RU_CHARS_SELECT = frozenset("фФ")
 
-def _command_keypress(event=None):
+
+def _handler_for(name: str) -> Callable:
+    return {
+        "paste": _paste,
+        "copy": _copy,
+        "cut": _cut,
+        "select_all": _select_all,
+    }[name]
+
+
+def _safe_bind(widget: tk.Misc, seq: str, handler: Callable, *, add: str | None = None) -> bool:
+    """bind без краша: не-ASCII keysym на части Tk → TclError."""
+    try:
+        if add is None:
+            widget.bind(seq, handler)
+        else:
+            widget.bind(seq, handler, add=add)
+        return True
+    except tk.TclError:
+        return False
+
+
+def _safe_bind_all(root: tk.Misc, seq: str, handler: Callable, *, add: str | None = None) -> bool:
+    try:
+        if add is None:
+            root.bind_all(seq, handler)
+        else:
+            root.bind_all(seq, handler, add=add)
+        return True
+    except tk.TclError:
+        return False
+
+
+def enable_mac_clipboard(root: ctk.CTk) -> None:
+    _STATE["root"] = root
+    _STATE["last"] = None
+
+    for seq, name in _ASCII_SEQUENCES:
+        _safe_bind_all(root, seq, _handler_for(name))
+
+    # Русская раскладка / любой keysym: keycode + char, без кириллицы в bind-строке
+    _safe_bind_all(root, "<Command-KeyPress>", _command_keypress)
+    _safe_bind_all(root, "<Meta-KeyPress>", _command_keypress)
+
+    _safe_bind_all(root, "<FocusIn>", _on_focus_in, add="+")
+    _bind_tree(root)
+
+
+def bind_widget(widget: tk.Misc) -> None:
+    native = _native(widget)
+    if native is None:
+        return
+    for seq, name in _ASCII_SEQUENCES:
+        _safe_bind(native, seq, _handler_for(name), add="+")
+    _safe_bind(native, "<Command-KeyPress>", _command_keypress, add="+")
+    _safe_bind(native, "<Meta-KeyPress>", _command_keypress, add="+")
+    _safe_bind(native, "<FocusIn>", _on_focus_in, add="+")
+
+
+def _clipboard_action_from_event(event) -> str | None:
+    """paste|copy|cut|select_all по keycode / char / keysym (ASCII или кириллица)."""
     if event is None:
         return None
     code = getattr(event, "keycode", None)
     if code == _KEYCODE_V:
-        return _paste(event)
+        return "paste"
     if code == _KEYCODE_C:
-        return _copy(event)
+        return "copy"
     if code == _KEYCODE_X:
-        return _cut(event)
+        return "cut"
     if code == _KEYCODE_A:
-        return _select_all(event)
+        return "select_all"
+
+    ch = getattr(event, "char", None) or ""
+    if ch in _RU_CHARS_PASTE or ch in ("v", "V"):
+        return "paste"
+    if ch in _RU_CHARS_COPY or ch in ("c", "C"):
+        return "copy"
+    if ch in _RU_CHARS_CUT or ch in ("x", "X"):
+        return "cut"
+    if ch in _RU_CHARS_SELECT or ch in ("a", "A"):
+        return "select_all"
+
+    sym = (getattr(event, "keysym", None) or "").lower()
+    if sym in ("v", "м"):
+        return "paste"
+    if sym in ("c", "с"):
+        return "copy"
+    if sym in ("x", "ч"):
+        return "cut"
+    if sym in ("a", "ф"):
+        return "select_all"
     return None
+
+
+def _command_keypress(event=None):
+    action = _clipboard_action_from_event(event)
+    if action is None:
+        return None
+    return _handler_for(action)(event)
 
 
 def _bind_tree(widget: tk.Misc) -> None:
@@ -219,7 +260,6 @@ def write_clipboard(widget: tk.Misc, data: str) -> None:
         widget.update_idletasks()
     except tk.TclError:
         pass
-    # Дублируем в системный буфер — иначе следующая вставка в Tk пустая
     try:
         subprocess.run(
             ["pbcopy"],
@@ -234,9 +274,6 @@ def write_clipboard(widget: tk.Misc, data: str) -> None:
 
 
 def _clear_ctk_placeholder(widget: tk.Misc) -> None:
-    """Если это внутренний Entry CTk с активным placeholder — сбросить."""
-    parent = getattr(widget, "master", None)
-    # CTkEntry: native._entry sits inside frames; climb a bit
     cur = widget
     for _ in range(5):
         if isinstance(cur, ctk.CTkEntry):
@@ -248,8 +285,6 @@ def _clear_ctk_placeholder(widget: tk.Misc) -> None:
         cur = getattr(cur, "master", None)
         if cur is None:
             break
-    # иногда placeholder живёт на parent chain иначе — no-op
-    _ = parent
 
 
 def insert_clipboard_text(widget: tk.Misc, text: str) -> bool:
@@ -281,7 +316,7 @@ def _paste(event=None):
         return None
     text = read_clipboard(widget)
     if not text:
-        return None  # не блокируем дефолтный <<Paste>>
+        return None
     if insert_clipboard_text(widget, text):
         return "break"
     return None

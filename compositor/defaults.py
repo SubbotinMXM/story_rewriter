@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 VIDEO_EXTS = {".mp4", ".mov", ".mkv", ".webm", ".m4v"}
 AUDIO_EXTS = {".mp3", ".wav", ".m4a", ".aac", ".flac", ".ogg"}
 
@@ -24,8 +26,11 @@ VIDEO_PRESET = "veryfast"
 VIDEO_CRF = 23
 AUDIO_BITRATE = "192k"
 
-# Анимация подписки (хромакей зелёного)
-SUBSCRIBE_PATH = "/Users/mac/Desktop/AAA.mp4"
+# Анимация подписки (хромакей). Клади файл сюда или передай путь в ComposeRequest;
+# при subscribe=True пайплайн проверяет is_file.
+SUBSCRIBE_PATH = str(
+    Path(__file__).resolve().parent.parent / "assets" / "subscribe.mp4"
+)
 SUBSCRIBE_START_MIN = 7.0
 SUBSCRIBE_START_MAX = 8.0
 SUBSCRIBE_VOLUME = 0.8  # на 20% тише оригинала

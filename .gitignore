@@ -9,3 +9,5 @@ build/
 rewriter.log
 .run/
 user_presets/
+# локальный asset для кнопки «подписка» (не обязателен)
+assets/subscribe.mp4
