@@ -18,9 +18,21 @@ DEFAULT_LUMEAN_BASE = "https://api.lumean.app/api/public"
 DEFAULT_TEMPLATE_ID = "019faa27-9a1a-70a9-a020-69f6a1e3e919"
 # Голос Cornelius (ElevenLabs Voice Library)
 DEFAULT_VOICE_ID = "6sFKzaJr574YWVu4UuJF"
+DEFAULT_VOICE_SPEED = 1.0
+VOICE_SPEED_MIN = 0.7
+VOICE_SPEED_MAX = 1.2
 DEFAULT_PUBLIC_OWNER_ID = (
     "a72a436938f959ab051e6a27b035db67a4b75945b4d6e8c86ed40e6e946a2e11"
 )
+
+
+def clamp_voice_speed(speed: float | None) -> float:
+    """Ограничить speed диапазоном ElevenLabs/Lumean."""
+    try:
+        val = float(speed) if speed is not None else DEFAULT_VOICE_SPEED
+    except (TypeError, ValueError):
+        val = DEFAULT_VOICE_SPEED
+    return max(VOICE_SPEED_MIN, min(VOICE_SPEED_MAX, val))
 
 # partially_completed = готов только кусок; ждать completed / result_delivered
 TERMINAL_OK = frozenset({"completed", "result_delivered"})
@@ -154,6 +166,7 @@ class LumeanClient:
         input_text: str,
         voice_id: str | None = None,
         public_owner_id: str | None = None,
+        speed: float | None = None,
     ) -> str:
         voice_id = (voice_id or DEFAULT_VOICE_ID).strip()
         public_owner_id = (public_owner_id or DEFAULT_PUBLIC_OWNER_ID).strip()
@@ -167,11 +180,13 @@ class LumeanClient:
         model_id = str(tts.get("model_id") or "").strip()
         vs_raw = tts.get("voice_settings")
         voice_settings = dict(vs_raw) if isinstance(vs_raw, dict) else {}
-        try:
-            speed = float(voice_settings.get("speed", 1.0) or 1.0)
-        except (TypeError, ValueError):
-            speed = 1.0
-        speed = max(0.7, min(1.2, speed))
+        # UI/override имеет приоритет над speed шаблона.
+        if speed is None:
+            try:
+                speed = float(voice_settings.get("speed", DEFAULT_VOICE_SPEED) or DEFAULT_VOICE_SPEED)
+            except (TypeError, ValueError):
+                speed = DEFAULT_VOICE_SPEED
+        speed = clamp_voice_speed(speed)
         voice_settings["speed"] = speed
         if "stability" not in voice_settings:
             voice_settings["stability"] = 0.5

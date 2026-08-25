@@ -57,6 +57,7 @@ class FullRunRequest:
     subscribe: bool
     subscribe_path: Path | None = None
     outro_dir: Path | None = None
+    voice_speed: float | None = None
     thumbnail_enabled: bool = False
     thumbnail_preset_id: str = field(default_factory=default_preset_id)
     thumbnail_variant_count: int = 1
@@ -334,6 +335,7 @@ def run_full_pipeline(
                     template_id=template_id,
                     input_text=text,
                     voice_id=req.voice_id,
+                    speed=req.voice_speed,
                 )
                 progress(0.56, f"Озвучка: заказ {order_id[:8]}…")
 

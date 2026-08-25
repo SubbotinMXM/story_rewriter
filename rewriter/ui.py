@@ -20,7 +20,15 @@ from rewriter.clipboard_mac import enable_mac_clipboard
 from rewriter.config import load_config, save_config
 from rewriter.full_pipeline import FullRunRequest, run_full_pipeline
 from rewriter.logutil import LOG_PATH, log, set_log_callback
-from rewriter.lumean import DEFAULT_TEMPLATE_ID, DEFAULT_VOICE_ID, LumeanClient
+from rewriter.lumean import (
+    DEFAULT_TEMPLATE_ID,
+    DEFAULT_VOICE_ID,
+    DEFAULT_VOICE_SPEED,
+    LumeanClient,
+    VOICE_SPEED_MAX,
+    VOICE_SPEED_MIN,
+    clamp_voice_speed,
+)
 from rewriter.openai_client import (
     DEFAULT_BASE_URL,
     DEFAULT_MODEL,
@@ -153,6 +161,14 @@ class App(ctk.CTk, TkinterDnD.DnDWrapper):
         self.voice_id_var = ctk.StringVar(
             value=str(cfg.get("lumean_voice_id") or DEFAULT_VOICE_ID)
         )
+        saved_speed = cfg.get("lumean_voice_speed")
+        try:
+            speed_init = clamp_voice_speed(
+                float(saved_speed) if saved_speed is not None else DEFAULT_VOICE_SPEED
+            )
+        except (TypeError, ValueError):
+            speed_init = DEFAULT_VOICE_SPEED
+        self.voice_speed_var = ctk.StringVar(value=f"{speed_init:g}")
         self.broll_var = ctk.StringVar(value=str(cfg.get("broll_dir", "")))
         self.head_var = ctk.StringVar(value=str(cfg.get("head_dir", "")))
         self.outro_var = ctk.StringVar(value=str(cfg.get("outro_dir", "")))
@@ -455,6 +471,8 @@ class App(ctk.CTk, TkinterDnD.DnDWrapper):
             fill="x", padx=12, pady=(0, 4)
         )
 
+        self._mount_voice_settings(body)
+
         ctk.CTkLabel(body, text="Вступление (в начало озвучки, без GPT)").pack(
             anchor="w", **pad
         )
@@ -636,6 +654,8 @@ class App(ctk.CTk, TkinterDnD.DnDWrapper):
             text_color="gray60",
         ).pack(anchor="w", padx=12, pady=(0, 6))
 
+        self._mount_voice_settings(body)
+
         ctk.CTkLabel(body, text="Вступление (в начало озвучки, без GPT)").pack(
             anchor="w", **pad
         )
@@ -679,6 +699,40 @@ class App(ctk.CTk, TkinterDnD.DnDWrapper):
 
         self._mount_compose_block(body, cfg)
         self.text_thumb_frame = self._mount_thumb_option(body)
+
+    def _mount_voice_settings(self, body) -> None:
+        """Voice ID + speed — общие StringVar для полного пайплайна и ролика по тексту."""
+        pad = {"padx": 12, "pady": 4}
+        ctk.CTkLabel(body, text="Lumean Voice ID (ElevenLabs)").pack(anchor="w", **pad)
+        ctk.CTkEntry(body, textvariable=self.voice_id_var).pack(
+            fill="x", padx=12, pady=(0, 4)
+        )
+        ctk.CTkLabel(
+            body,
+            text=(
+                f"Скорость озвучки ({VOICE_SPEED_MIN:g}–{VOICE_SPEED_MAX:g}, "
+                "1.0 = норма; для v3 дотягивается atempo)"
+            ),
+        ).pack(anchor="w", **pad)
+        speed_row = ctk.CTkFrame(body, fg_color="transparent")
+        speed_row.pack(fill="x", padx=12, pady=(0, 6))
+        ctk.CTkEntry(speed_row, textvariable=self.voice_speed_var, width=100).pack(
+            side="left"
+        )
+        ctk.CTkLabel(
+            speed_row,
+            text="  например 0.9 медленнее, 1.1 быстрее",
+            text_color="gray60",
+        ).pack(side="left")
+
+    def _read_voice_speed(self) -> float:
+        raw = self.voice_speed_var.get().strip().replace(",", ".")
+        if not raw:
+            return DEFAULT_VOICE_SPEED
+        try:
+            return clamp_voice_speed(float(raw))
+        except (TypeError, ValueError):
+            return DEFAULT_VOICE_SPEED
 
     def _build_from_audio_tab(self, body, cfg: dict) -> None:
         pad = {"padx": 12, "pady": 4}
@@ -1822,6 +1876,7 @@ class App(ctk.CTk, TkinterDnD.DnDWrapper):
             "lumean_template_id": self.template_id_var.get().strip()
             or DEFAULT_TEMPLATE_ID,
             "lumean_voice_id": self.voice_id_var.get().strip() or DEFAULT_VOICE_ID,
+            "lumean_voice_speed": self._read_voice_speed(),
             "prefix": self.prefix_box.get("1.0", "end-1c"),
             "overlay_text": self._overlay_for_persist(),
             "broll_dir": self.broll_var.get().strip(),
@@ -2050,6 +2105,7 @@ class App(ctk.CTk, TkinterDnD.DnDWrapper):
         model = self.model_var.get().strip() or DEFAULT_MODEL
         template_id = self.template_id_var.get().strip() or DEFAULT_TEMPLATE_ID
         voice_id = self.voice_id_var.get().strip() or DEFAULT_VOICE_ID
+        voice_speed = self._read_voice_speed()
         prefix = self.prefix_box.get("1.0", "end-1c")
         source = self.source_box.get("1.0", "end-1c")
         profession = self.profession_var.get().strip()
@@ -2114,6 +2170,7 @@ class App(ctk.CTk, TkinterDnD.DnDWrapper):
             lumean_api_key=lumean_key,
             template_id=template_id,
             voice_id=voice_id,
+            voice_speed=voice_speed,
             broll_dir=broll,
             head_dir=head,
             subscribe=subscribe,
@@ -2219,6 +2276,7 @@ class App(ctk.CTk, TkinterDnD.DnDWrapper):
                     lumean_api_key=lumean_key,
                     template_id=self.template_id_var.get().strip() or DEFAULT_TEMPLATE_ID,
                     voice_id=self.voice_id_var.get().strip() or DEFAULT_VOICE_ID,
+                    voice_speed=self._read_voice_speed(),
                     thumb=thumb,
                     work_audio=work_audio,
                     on_progress=self._progress,

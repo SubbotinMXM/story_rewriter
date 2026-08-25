@@ -11,7 +11,12 @@ from typing import Callable
 from compositor.pipeline import ComposeRequest, build_and_run
 from rewriter.cancel import CancelToken, CancelledError
 from rewriter.logutil import log
-from rewriter.lumean import DEFAULT_TEMPLATE_ID, DEFAULT_VOICE_ID, LumeanClient, tts_wait_timeout_sec
+from rewriter.lumean import (
+    DEFAULT_TEMPLATE_ID,
+    DEFAULT_VOICE_ID,
+    LumeanClient,
+    tts_wait_timeout_sec,
+)
 from rewriter.openai_client import DEFAULT_BASE_URL
 from rewriter.pipeline import (
     audio_output_path,
@@ -157,6 +162,7 @@ def synthesize_tts(
     voice_id: str,
     cancel: CancelToken | None,
     on_progress: ProgressCb | None,
+    voice_speed: float | None = None,
 ) -> int:
     if on_progress:
         on_progress(0.35, "Озвучка: создаю заказ Lumean…")
@@ -172,6 +178,7 @@ def synthesize_tts(
             template_id=tid,
             input_text=text,
             voice_id=voice_id or DEFAULT_VOICE_ID,
+            speed=voice_speed,
         )
         if on_progress:
             on_progress(0.40, f"Озвучка: заказ {order_id[:8]}…")
@@ -267,6 +274,7 @@ def run_video_from_text(
     on_progress: ProgressCb | None = None,
     on_preview_phrases: Callable[[list[str]], None] | None = None,
     cancel: CancelToken | None = None,
+    voice_speed: float | None = None,
 ) -> VideoRunResult:
     """Готовый .txt → (превью) → TTS → видео. Без рерайта и без чекпоинта."""
 
@@ -308,6 +316,7 @@ def run_video_from_text(
         lumean_api_key=lumean_api_key,
         template_id=template_id,
         voice_id=voice_id,
+        voice_speed=voice_speed,
         cancel=cancel,
         on_progress=progress,
     )
