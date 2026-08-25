@@ -19,9 +19,17 @@ EFFECTS: dict[str, str] = {
 }
 
 
-def pick_head(folder: Path, rng: random.Random | None = None) -> Path:
+def pick_head(folder: Path | None, rng: random.Random | None = None) -> Path | None:
+    """Случайное видео головы диктора из папки.
+
+    Если папка не задана / не является директорией или в ней нет видео — None.
+    """
+    if folder is None or not folder.is_dir():
+        return None
     rng = rng or random.Random()
     files = list_videos(folder)
+    if not files:
+        return None
     return rng.choice(files)
 
 

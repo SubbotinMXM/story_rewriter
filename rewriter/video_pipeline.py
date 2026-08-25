@@ -33,13 +33,13 @@ from rewriter.thumbnail_presets import default_preset_id
 
 ProgressCb = Callable[[float, str], None]
 
-
 @dataclass
 class ComposeParams:
     overlay_text: str
     broll_dir: Path
-    head_dir: Path
+    head_dir: Path | None
     subscribe: bool
+    subscribe_path: Path | None = None
     outro_dir: Path | None = None
 
 
@@ -222,6 +222,7 @@ def compose_video(
             text=compose.overlay_text,
             output=out,
             subscribe=compose.subscribe,
+            subscribe_path=compose.subscribe_path,
             outro_dir=compose.outro_dir,
         ),
         on_progress=video_prog,

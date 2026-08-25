@@ -94,6 +94,32 @@ def is_expected_network_error(exc: BaseException) -> bool:
     return "Timeout" in name or "Connection" in name
 
 
+def is_content_policy_error(exc: BaseException) -> bool:
+    """403 / content_policy — не ретраим, вызывающий код может fail-soft."""
+    name = type(exc).__name__
+    if name in ("PermissionDeniedError", "ContentFilterFinishReasonError"):
+        return True
+    status = getattr(exc, "status_code", None)
+    msg = str(exc).lower()
+    if status == 403 and (
+        "content_policy" in msg
+        or "content policy" in msg
+        or "cbrn" in msg
+        or "rejected" in msg
+    ):
+        return True
+    return any(
+        s in msg
+        for s in (
+            "content_policy",
+            "content policy",
+            "content_policy_violation",
+            "cbrn",
+            "safety system",
+        )
+    )
+
+
 def _models_unsupported(exc: BaseException) -> bool:
     """GET /models нет на прокси → можно fallback на chat."""
     status = getattr(exc, "status_code", None)

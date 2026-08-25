@@ -13,7 +13,7 @@ import customtkinter as ctk
 from PIL import Image
 from tkinterdnd2 import DND_FILES, TkinterDnD
 
-from compositor.defaults import AUDIO_EXTS
+from compositor.defaults import AUDIO_EXTS, SUBSCRIBE_PATH, VIDEO_EXTS
 from rewriter import checkpoint as cp
 from rewriter.cancel import CancelToken, CancelledError
 from rewriter.clipboard_mac import enable_mac_clipboard
@@ -156,7 +156,12 @@ class App(ctk.CTk, TkinterDnD.DnDWrapper):
         self.broll_var = ctk.StringVar(value=str(cfg.get("broll_dir", "")))
         self.head_var = ctk.StringVar(value=str(cfg.get("head_dir", "")))
         self.outro_var = ctk.StringVar(value=str(cfg.get("outro_dir", "")))
-        self.subscribe_var = ctk.BooleanVar(value=bool(cfg.get("subscribe", False)))
+        subscribe_path = str(
+            cfg.get("subscribe_path")
+            or (cfg.get("subscribe", False) and SUBSCRIBE_PATH)
+            or ""
+        )
+        self.subscribe_path_var = ctk.StringVar(value=subscribe_path)
 
         self.image_api_key_var = ctk.StringVar(
             value=str(cfg.get("image_api_key") or DEFAULT_IMAGE_API_KEY)
@@ -541,11 +546,21 @@ class App(ctk.CTk, TkinterDnD.DnDWrapper):
         self._overlay_boxes.append(self.overlay_box)
 
         self._row_path(body, "Папка футажей (b-roll)", self.broll_var, self._pick_broll)
-        self._row_path(body, "Папка головы диктора", self.head_var, self._pick_head)
-        self._row_path(body, "Папка аутро", self.outro_var, self._pick_outro)
-        ctk.CTkCheckBox(
-            body, text="Анимация подписки", variable=self.subscribe_var
-        ).pack(anchor="w", padx=12, pady=8)
+        self._row_path(
+            body,
+            "Папка головы диктора (опционально)",
+            self.head_var,
+            self._pick_head,
+        )
+        self._row_path(
+            body, "Папка аутро (опционально)", self.outro_var, self._pick_outro
+        )
+        self._row_file(
+            body,
+            "Файл анимации подписки (опционально)",
+            self.subscribe_path_var,
+            self._pick_subscribe_file,
+        )
 
         ctk.CTkCheckBox(
             body,
@@ -576,11 +591,21 @@ class App(ctk.CTk, TkinterDnD.DnDWrapper):
             overlay.insert("1.0", str(cfg["overlay_text"]))
         self._overlay_boxes.append(overlay)
         self._row_path(body, "Папка футажей (b-roll)", self.broll_var, self._pick_broll)
-        self._row_path(body, "Папка головы диктора", self.head_var, self._pick_head)
-        self._row_path(body, "Папка аутро", self.outro_var, self._pick_outro)
-        ctk.CTkCheckBox(
-            body, text="Анимация подписки", variable=self.subscribe_var
-        ).pack(anchor="w", padx=12, pady=8)
+        self._row_path(
+            body,
+            "Папка головы диктора (опционально)",
+            self.head_var,
+            self._pick_head,
+        )
+        self._row_path(
+            body, "Папка аутро (опционально)", self.outro_var, self._pick_outro
+        )
+        self._row_file(
+            body,
+            "Файл анимации подписки (опционально)",
+            self.subscribe_path_var,
+            self._pick_subscribe_file,
+        )
         return overlay
 
     def _mount_thumb_option(self, body) -> ctk.CTkFrame:
@@ -1551,6 +1576,15 @@ class App(ctk.CTk, TkinterDnD.DnDWrapper):
         )
         ctk.CTkButton(row, text="…", width=40, command=command).pack(side="right")
 
+    def _row_file(self, parent, label, var, command) -> None:
+        ctk.CTkLabel(parent, text=label).pack(anchor="w", padx=12, pady=(4, 2))
+        row = ctk.CTkFrame(parent, fg_color="transparent")
+        row.pack(fill="x", padx=12, pady=(0, 4))
+        ctk.CTkEntry(row, textvariable=var).pack(
+            side="left", fill="x", expand=True, padx=(0, 8)
+        )
+        ctk.CTkButton(row, text="…", width=40, command=command).pack(side="right")
+
     def _pick_broll(self) -> None:
         path = filedialog.askdirectory(title="Папка футажей")
         if path:
@@ -1565,6 +1599,14 @@ class App(ctk.CTk, TkinterDnD.DnDWrapper):
         path = filedialog.askdirectory(title="Папка аутро")
         if path:
             self.outro_var.set(path)
+
+    def _pick_subscribe_file(self) -> None:
+        path = filedialog.askopenfilename(
+            title="Анимация подписки (mp4/mov/…)",
+            filetypes=[("Video", " ".join(f"*{e}" for e in sorted(VIDEO_EXTS)))],
+        )
+        if path:
+            self.subscribe_path_var.set(path)
 
     def _append_log(self, line: str) -> None:
         def _ui() -> None:
@@ -1744,7 +1786,9 @@ class App(ctk.CTk, TkinterDnD.DnDWrapper):
             "broll_dir": self.broll_var.get().strip(),
             "head_dir": self.head_var.get().strip(),
             "outro_dir": self.outro_var.get().strip(),
-            "subscribe": bool(self.subscribe_var.get()),
+            "subscribe_path": self.subscribe_path_var.get().strip(),
+            # для обратной совместимости с прежними версиями
+            "subscribe": bool(self.subscribe_path_var.get().strip()),
             "image_api_key": self.image_api_key_var.get().strip()
             or DEFAULT_IMAGE_API_KEY,
             "image_base_url": self.image_base_url_var.get().strip()
@@ -1889,11 +1933,15 @@ class App(ctk.CTk, TkinterDnD.DnDWrapper):
         return Path(raw) if raw else None
 
     def _compose_params(self, overlay: str) -> ComposeParams:
+        subscribe_path = self.subscribe_path_var.get().strip()
+        head_raw = self.head_var.get().strip()
+        head_dir = Path(head_raw) if head_raw else None
         return ComposeParams(
             overlay_text=overlay,
             broll_dir=Path(self.broll_var.get().strip()),
-            head_dir=Path(self.head_var.get().strip()),
-            subscribe=bool(self.subscribe_var.get()),
+            head_dir=head_dir,
+            subscribe=bool(subscribe_path),
+            subscribe_path=Path(subscribe_path) if subscribe_path else None,
             outro_dir=self._optional_dir(self.outro_var),
         )
 
@@ -1916,12 +1964,8 @@ class App(ctk.CTk, TkinterDnD.DnDWrapper):
             messagebox.showerror("Ошибка", "Вставь текст оверлея")
             return False
         broll = Path(self.broll_var.get().strip())
-        head = Path(self.head_var.get().strip())
         if not broll.is_dir():
             messagebox.showerror("Ошибка", "Укажи папку футажей")
-            return False
-        if not head.is_dir():
-            messagebox.showerror("Ошибка", "Укажи папку головы")
             return False
         return True
 
@@ -1974,8 +2018,10 @@ class App(ctk.CTk, TkinterDnD.DnDWrapper):
             story_mode = MODE_REWRITE
         overlay = self.overlay_box.get("1.0", "end-1c").strip()
         broll = Path(self.broll_var.get().strip())
-        head = Path(self.head_var.get().strip())
-        subscribe = bool(self.subscribe_var.get())
+        head_raw = self.head_var.get().strip()
+        head = Path(head_raw) if head_raw else None
+        subscribe_path = self.subscribe_path_var.get().strip()
+        subscribe = bool(subscribe_path)
         thumb_on = bool(self.thumbnail_enabled_var.get())
 
         if not gpt_key:
@@ -2030,6 +2076,7 @@ class App(ctk.CTk, TkinterDnD.DnDWrapper):
             broll_dir=broll,
             head_dir=head,
             subscribe=subscribe,
+            subscribe_path=Path(subscribe_path) if subscribe_path else None,
             outro_dir=self._optional_dir(self.outro_var),
             thumbnail_enabled=thumb_on,
             thumbnail_preset_id=preset_id,

@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Callable, Literal
+from compositor.defaults import SUBSCRIBE_PATH
 
 from compositor.pipeline import ComposeRequest, build_and_run
 from rewriter import checkpoint as cp
@@ -52,8 +53,9 @@ class FullRunRequest:
     template_id: str
     voice_id: str
     broll_dir: Path
-    head_dir: Path
+    head_dir: Path | None
     subscribe: bool
+    subscribe_path: Path | None = None
     outro_dir: Path | None = None
     thumbnail_enabled: bool = False
     thumbnail_preset_id: str = field(default_factory=default_preset_id)
@@ -170,6 +172,7 @@ def run_full_pipeline(
     preview_error = ""
     story_meta: StoryMeta | None = None
     story_plan: str = ""
+    story_canon: str = ""
     out_dir: Path | None = None
     text_file: Path | None = None
     audio_file: Path | None = None
@@ -221,6 +224,7 @@ def run_full_pipeline(
                 text = generated_hook.text
                 story_meta = generated_hook.meta
                 story_plan = generated_hook.plan
+                story_canon = generated_hook.canon or ""
                 if on_story_meta and story_meta is not None:
                     on_story_meta(story_meta)
             else:
@@ -246,6 +250,9 @@ def run_full_pipeline(
             if story_plan.strip():
                 plan_path = save_story_plan(story_plan, out_dir / "story_plan.md")
                 progress(0.423, f"План сохранён: {plan_path.name}")
+            if story_canon.strip():
+                canon_path = save_story_plan(story_canon, out_dir / "story_canon.md")
+                progress(0.424, f"Канон сохранён: {canon_path.name}")
             if story_meta is not None:
                 meta_path = _save_story_meta(story_meta, out_dir)
                 if meta_path:
@@ -372,6 +379,7 @@ def run_full_pipeline(
                 text=req.overlay_text,
                 output=out,
                 subscribe=req.subscribe,
+                subscribe_path=req.subscribe_path,
                 outro_dir=req.outro_dir,
             ),
             on_progress=video_prog,

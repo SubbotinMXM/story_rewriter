@@ -37,12 +37,12 @@ from compositor.utils import find_ffmpeg, has_audio_stream, probe_duration
 class ComposeRequest:
     audio: Path
     broll_dir: Path
-    head_dir: Path
+    head_dir: Path | None
     text: str
     output: Path
     seed: int | None = None
     subscribe: bool = False
-    subscribe_path: Path = Path(SUBSCRIBE_PATH)
+    subscribe_path: Path | None = Path(SUBSCRIBE_PATH)
     outro_dir: Path | None = None
 
 
@@ -51,7 +51,7 @@ class ComposeResult:
     output: Path
     duration: float
     broll: list[Path]
-    head: Path
+    head: Path | None
     effect: str
     head_corner: str
     text_corner: str
@@ -96,6 +96,7 @@ def build_and_run(
 
     broll = pick_broll(req.broll_dir, rng)
     head = pick_head(req.head_dir, rng)
+    use_head = head is not None
     effect_name, effect_filter = pick_effect(rng)
     head_corner, text_corner = _pick_corners(rng)
 
@@ -109,22 +110,32 @@ def build_and_run(
     sub_dur = 0.0
     if use_sub:
         if not sub_path.is_file():
-            raise FileNotFoundError(f"Нет анимации подписки: {sub_path}")
-        sub_dur = probe_duration(sub_path)
-        sub_start = rng.uniform(SUBSCRIBE_START_MIN, SUBSCRIBE_START_MAX)
-        if sub_start + sub_dur > duration:
-            # если ролик короче — всё равно ставим, ffmpeg обрежет через enable
-            pass
+            # Подписка — опциональная фича. На другом Mac ассет может отсутствовать.
+            # Вместо падения просто пропустим overlay.
+            use_sub = False
+            print(f"[WARN] Анимация подписки не найдена, пропускаю: {sub_path}")
+        else:
+            sub_dur = probe_duration(sub_path)
+            sub_start = rng.uniform(SUBSCRIBE_START_MIN, SUBSCRIBE_START_MAX)
+            if sub_start + sub_dur > duration:
+                # если ролик короче — всё равно ставим, ffmpeg обрежет через enable
+                pass
 
     req.output.parent.mkdir(parents=True, exist_ok=True)
     text_png = req.output.with_suffix(".text.png")
     render_text_png(req.text, text_png, text_corner)
 
-    # inputs: 0=audio, 1..n=broll, n+1=head, n+2=text png [, n+3=subscribe]
+    # inputs:
+    # 0=audio
+    # 1..n=broll
+    # n+1[+head?]=head (optional)
+    # next=text png
+    # next=subscribe (optional)
     cmd: list[str] = [ffmpeg, "-y", "-i", str(req.audio)]
     for clip in broll:
         cmd += ["-stream_loop", "-1", "-t", f"{slot:.3f}", "-i", str(clip)]
-    cmd += ["-stream_loop", "-1", "-t", f"{duration:.3f}", "-i", str(head)]
+    if use_head:
+        cmd += ["-stream_loop", "-1", "-t", f"{duration:.3f}", "-i", str(head)]
     cmd += ["-loop", "1", "-t", f"{duration:.3f}", "-i", str(text_png)]
     if use_sub:
         cmd += ["-i", str(sub_path)]
@@ -145,24 +156,28 @@ def build_and_run(
     filters.append("".join(concat_inputs) + f"concat=n={n}:v=1:a=0[bg0]")
     filters.append(f"[bg0]{effect_filter}[bg]")
 
-    head_in = f"{n + 1}:v"
-    filters.append(
-        f"[{head_in}]scale={head_w}:-2,setsar=1,fps={OUT_FPS},format=yuv420p,"
-        f"trim=duration={duration:.3f},setpts=PTS-STARTPTS[head]"
-    )
-
-    ox, oy = _corner_xy(head_corner, OVERLAY_MARGIN)
-    filters.append(f"[bg][head]overlay=x={ox}:y={oy}:format=auto[withhead]")
-
-    text_in = f"{n + 2}:v"
+    text_in_idx = n + 1 + (1 if use_head else 0)
+    text_in = f"{text_in_idx}:v"
     base_label = "withtext"
+    if use_head:
+        head_in = f"{n + 1}:v"
+        filters.append(
+            f"[{head_in}]scale={head_w}:-2,setsar=1,fps={OUT_FPS},format=yuv420p,"
+            f"trim=duration={duration:.3f},setpts=PTS-STARTPTS[head]"
+        )
+        ox, oy = _corner_xy(head_corner, OVERLAY_MARGIN)
+        filters.append(f"[bg][head]overlay=x={ox}:y={oy}:format=auto[withhead]")
+    else:
+        filters.append("[bg]null[withhead]")
+
     filters.append(
         f"[{text_in}]format=rgba,fps={OUT_FPS}[txt];"
         f"[withhead][txt]overlay=0:0:format=auto[{base_label}]"
     )
 
     if use_sub:
-        sub_in = f"{n + 3}"
+        sub_in_idx = text_in_idx + 1
+        sub_in = f"{sub_in_idx}"
         sub_w = int(OUT_WIDTH * SUBSCRIBE_MAX_WIDTH_RATIO)
         end = sub_start + sub_dur
         filters.append(
