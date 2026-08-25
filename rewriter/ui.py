@@ -207,6 +207,7 @@ class App(ctk.CTk, TkinterDnD.DnDWrapper):
         self._prompt_rows: dict[str, dict] = {}
         self._prompt_expanded: set[str] = {default_preset_id()}
         self._prompt_action_btns: list = []
+        self._last_tab = TAB_FULL
 
         self.preview_ui = PreviewUI(
             preset_var=self.thumb_preset_var,
@@ -635,6 +636,14 @@ class App(ctk.CTk, TkinterDnD.DnDWrapper):
             text_color="gray60",
         ).pack(anchor="w", padx=12, pady=(0, 6))
 
+        ctk.CTkLabel(body, text="Вступление (в начало озвучки, без GPT)").pack(
+            anchor="w", **pad
+        )
+        self.from_text_prefix_box = ctk.CTkTextbox(body, height=70)
+        self.from_text_prefix_box.pack(fill="x", padx=12, pady=(0, 6))
+        if cfg.get("prefix"):
+            self.from_text_prefix_box.insert("1.0", str(cfg["prefix"]))
+
         ctk.CTkLabel(body, text="Текстовый файл (.txt) — перетащи или выбери").pack(
             anchor="w", **pad
         )
@@ -662,10 +671,11 @@ class App(ctk.CTk, TkinterDnD.DnDWrapper):
             side="right"
         )
 
-        ctk.CTkLabel(body, text="Превью текста (read-only)").pack(anchor="w", **pad)
-        self.from_text_preview = ctk.CTkTextbox(body, height=140)
-        self.from_text_preview.pack(fill="x", padx=12, pady=(0, 6))
-        self.from_text_preview.configure(state="disabled")
+        ctk.CTkLabel(
+            body, text="Текст рассказа (вставь вручную или загрузи из .txt)"
+        ).pack(anchor="w", **pad)
+        self.from_text_box = ctk.CTkTextbox(body, height=200)
+        self.from_text_box.pack(fill="both", expand=True, padx=12, pady=(0, 6))
 
         self._mount_compose_block(body, cfg)
         self.text_thumb_frame = self._mount_thumb_option(body)
@@ -1454,6 +1464,26 @@ class App(ctk.CTk, TkinterDnD.DnDWrapper):
         if path:
             self._load_from_text_file(Path(path))
 
+    def _sync_prefix_for_persist(self) -> None:
+        """Синхронизировать «Вступление» между вкладками перед сохранением."""
+        if not hasattr(self, "from_text_prefix_box"):
+            return
+        if self._active_tab() == TAB_TEXT:
+            val = self.from_text_prefix_box.get("1.0", "end-1c")
+            self.prefix_box.delete("1.0", "end")
+            if val:
+                self.prefix_box.insert("1.0", val)
+        else:
+            val = self.prefix_box.get("1.0", "end-1c")
+            self.from_text_prefix_box.delete("1.0", "end")
+            if val:
+                self.from_text_prefix_box.insert("1.0", val)
+
+    def _read_from_text_prefix(self) -> str:
+        if hasattr(self, "from_text_prefix_box"):
+            return self.from_text_prefix_box.get("1.0", "end-1c")
+        return self.prefix_box.get("1.0", "end-1c")
+
     def _load_from_text_file(self, path: Path) -> None:
         try:
             text = self._read_text_file(path)
@@ -1462,11 +1492,8 @@ class App(ctk.CTk, TkinterDnD.DnDWrapper):
             return
         self.from_text_file_var.set(str(path))
         self._story_for_text_run = text
-        self.from_text_preview.configure(state="normal")
-        self.from_text_preview.delete("1.0", "end")
-        preview = text if len(text) <= 4000 else text[:4000] + "\n…"
-        self.from_text_preview.insert("1.0", preview)
-        self.from_text_preview.configure(state="disabled")
+        self.from_text_box.delete("1.0", "end")
+        self.from_text_box.insert("1.0", text)
         self.from_text_drop_label.configure(
             text=f"Файл: {path.name} ({len(text)} символов)"
         )
@@ -1538,6 +1565,19 @@ class App(ctk.CTk, TkinterDnD.DnDWrapper):
             self._propagate_overlay(self._read_overlay())
         except Exception:
             pass
+        if hasattr(self, "from_text_prefix_box"):
+            tab = self._active_tab()
+            if tab == TAB_TEXT:
+                val = self.prefix_box.get("1.0", "end-1c")
+                self.from_text_prefix_box.delete("1.0", "end")
+                if val:
+                    self.from_text_prefix_box.insert("1.0", val)
+            elif hasattr(self, "_last_tab") and self._last_tab == TAB_TEXT:
+                val = self.from_text_prefix_box.get("1.0", "end-1c")
+                self.prefix_box.delete("1.0", "end")
+                if val:
+                    self.prefix_box.insert("1.0", val)
+            self._last_tab = tab
         if not self._busy:
             self._refresh_run_button()
 
@@ -1773,6 +1813,7 @@ class App(ctk.CTk, TkinterDnD.DnDWrapper):
         messagebox.showinfo("Чекпоинт", "Сброшено. Следующий запуск пойдет с рерайта.")
 
     def _persist(self) -> None:
+        self._sync_prefix_for_persist()
         data = {
             "api_key": self.api_key_var.get().strip(),
             "base_url": self.base_url_var.get().strip() or DEFAULT_BASE_URL,
@@ -2123,20 +2164,26 @@ class App(ctk.CTk, TkinterDnD.DnDWrapper):
     def _on_run_from_text(self) -> None:
         if self._busy:
             return
-        story = self._story_for_text_run.strip()
+        story = self.from_text_box.get("1.0", "end-1c").strip()
         if not story:
-            # попробуем дочитать с диска
             path = Path(self.from_text_file_var.get().strip())
             if path.is_file():
                 try:
                     story = self._read_text_file(path).strip()
-                    self._story_for_text_run = story
+                    self.from_text_box.delete("1.0", "end")
+                    self.from_text_box.insert("1.0", story)
                 except Exception as exc:
                     messagebox.showerror("Ролик по тексту", str(exc))
                     return
         if not story:
-            messagebox.showerror("Ролик по тексту", "Загрузи .txt с рассказом")
+            messagebox.showerror(
+                "Ролик по тексту",
+                "Вставь текст рассказа в поле или загрузи .txt",
+            )
             return
+        prefix = self._read_from_text_prefix()
+        text = f"{prefix}{story}" if prefix else story
+        self._story_for_text_run = story
         lumean_key = self.lumean_key_var.get().strip()
         if not lumean_key:
             messagebox.showerror("Ошибка", "Вставь Lumean API key (вкладка полного пайплайна)")
@@ -2167,7 +2214,7 @@ class App(ctk.CTk, TkinterDnD.DnDWrapper):
             try:
                 cp.ensure_run_dir()
                 result = run_video_from_text(
-                    story_text=story,
+                    story_text=text,
                     compose=compose,
                     lumean_api_key=lumean_key,
                     template_id=self.template_id_var.get().strip() or DEFAULT_TEMPLATE_ID,
